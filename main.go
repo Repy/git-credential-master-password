@@ -10,7 +10,9 @@ import (
 	"golang.org/x/crypto/ssh/terminal"
 	"io/ioutil"
 	"math/rand"
+	"net"
 	"os"
+	"os/exec"
 	"os/user"
 	"strings"
 )
@@ -27,6 +29,11 @@ type Data struct {
 
 func main() {
 	mode := os.Args[1]
+	if mode == "daemon" {
+		daemon()
+		return
+	}
+
 	stdin := bufio.NewScanner(os.Stdin)
 	params := map[string]string{}
 	//標準入力からデータ取り出し
@@ -126,7 +133,7 @@ func decryptFile(key []byte) []byte {
 	decryptStream := cipher.NewCTR(block, iv)
 	decryptStream.XORKeyStream(decrypted, data)
 
-	fmt.Fprintf(os.Stderr, "%+v\n", string(decrypted))
+	//fmt.Fprintf(os.Stderr, "%+v\n", string(decrypted))
 	return decrypted
 }
 
@@ -150,29 +157,49 @@ func readFile() ([]byte, []byte) {
 	return bytes[:aes.BlockSize], bytes[aes.BlockSize:]
 }
 
-func readMasterPassD() []byte {
-	key := sha256.Sum256([]byte("afhkj"))
-	return key[:]
-}
 func readMasterPass() []byte {
-	tty, err1 := os.Open("/dev/tty")
-	if err1 != nil {
-		panic(err1)
+	var masterpass string
+	masterpass = ""
+	conn, err := net.Dial("unix", fileName()+".lock")
+	if err != nil {
+		exec.Command(os.Args[0], "daemon").Start()
+	} else {
+		read := bufio.NewReader(conn)
+		conn.Write([]byte("read\n"))
+		line, _, err := read.ReadLine()
+		if err == nil {
+			masterpass = string(line)
+			masterpass = strings.TrimSpace(masterpass)
+		}
+		conn.Close()
+	}
+	if masterpass == "" {
+		tty, err := os.Open("/dev/tty")
+		if err != nil {
+			panic(err)
+		}
+
+		fmt.Fprintf(os.Stderr, "master password:")
+		masterpassb, err := terminal.ReadPassword(int(tty.Fd()))
+		if err != nil {
+			panic(err)
+		}
+		masterpass = string(masterpassb)
+		masterpass = strings.TrimSpace(masterpass)
+
+		conn, err := net.Dial("unix", fileName()+".lock")
+		if err == nil {
+			conn.Write([]byte(masterpass))
+			conn.Write([]byte("\n"))
+			conn.Close()
+		}
 	}
 
-	fmt.Fprintf(os.Stderr, "master password:")
-	str, err2 := terminal.ReadPassword(int(tty.Fd()))
-	if err2 != nil {
-		panic(err2)
-	}
-
-	key := sha256.Sum256([]byte(str))
-	fmt.Fprintf(os.Stderr, "SHA-256 : %x\n", key)
+	key := sha256.Sum256([]byte(masterpass))
 	return key[:]
 }
 
 func encryptFile(key []byte, data []byte) {
-	fmt.Fprintf(os.Stderr, "%+v\n", string(data))
 
 	block, err := aes.NewCipher(key)
 	if err != nil {
