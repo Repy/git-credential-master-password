@@ -20,6 +20,7 @@ func daemon() {
 	timeout := time.Now().Add(60 * time.Second)
 	go func() {
 		for timeout.After(time.Now()) {
+			time.Sleep(10 * time.Second)
 		}
 		lock.Close()
 	}()
