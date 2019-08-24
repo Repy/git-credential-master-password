@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"os/user"
 	"strings"
+	"time"
 )
 
 type DataList struct {
@@ -49,12 +50,21 @@ func main() {
 	list := &DataList{
 		Data: []Data{},
 	}
-	key := readMasterPass()
-	dataRaw := decryptFile(key)
+	masterpass := readMasterPass()
+	if masterpass == "" {
+		masterpass = scanMasterPass()
+	}
+	if masterpass == "" {
+		console("Not input master password.")
+		os.Exit(1)
+	}
+	key := sha256.Sum256([]byte(masterpass))
+	dataRaw := decryptFile(key[:])
 	if dataRaw != nil {
 		err := json.Unmarshal(dataRaw, list)
 		if err != nil {
-			panic(err)
+			console("master password error.")
+			os.Exit(1)
 		}
 	}
 
@@ -72,7 +82,12 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	encryptFile(key, dataRaw)
+	encryptFile(key[:], dataRaw)
+	saveMasterPass(masterpass)
+}
+
+func console(msg string) {
+	fmt.Fprintf(os.Stderr, "%s\n", msg)
 }
 
 func get(list *DataList, protocol string, host string) {
@@ -157,13 +172,11 @@ func readFile() ([]byte, []byte) {
 	return bytes[:aes.BlockSize], bytes[aes.BlockSize:]
 }
 
-func readMasterPass() []byte {
+func readMasterPass() string {
 	var masterpass string
 	masterpass = ""
 	conn, err := net.Dial("unix", fileName()+".lock")
-	if err != nil {
-		exec.Command(os.Args[0], "daemon").Start()
-	} else {
+	if err == nil {
 		read := bufio.NewReader(conn)
 		conn.Write([]byte("read\n"))
 		line, _, err := read.ReadLine()
@@ -173,20 +186,27 @@ func readMasterPass() []byte {
 		}
 		conn.Close()
 	}
-	if masterpass == "" {
-		tty, err := os.Open("/dev/tty")
-		if err != nil {
-			panic(err)
-		}
+	return masterpass
+}
+func scanMasterPass() string {
+	tty, err := os.Open("/dev/tty")
+	if err != nil {
+		panic(err)
+	}
+	fmt.Fprintf(os.Stderr, "master password:")
+	masterpassb, err := terminal.ReadPassword(int(tty.Fd()))
+	if err != nil {
+		panic(err)
+	}
+	masterpass := string(masterpassb)
+	masterpass = strings.TrimSpace(masterpass)
+	return masterpass
+}
 
-		fmt.Fprintf(os.Stderr, "master password:")
-		masterpassb, err := terminal.ReadPassword(int(tty.Fd()))
-		if err != nil {
-			panic(err)
-		}
-		masterpass = string(masterpassb)
-		masterpass = strings.TrimSpace(masterpass)
-
+func saveMasterPass(masterpass string) {
+	if readMasterPass() == "" {
+		exec.Command(os.Args[0], "daemon").Start()
+		time.Sleep(1 * time.Second)
 		conn, err := net.Dial("unix", fileName()+".lock")
 		if err == nil {
 			conn.Write([]byte(masterpass))
@@ -194,9 +214,6 @@ func readMasterPass() []byte {
 			conn.Close()
 		}
 	}
-
-	key := sha256.Sum256([]byte(masterpass))
-	return key[:]
 }
 
 func encryptFile(key []byte, data []byte) {
