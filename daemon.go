@@ -30,7 +30,7 @@ func daemon() {
 		if err != nil {
 			panic(err)
 		}
-		timeout = time.Now().Add(60 * time.Second)
+		timeout = time.Now().Add(1200 * time.Second)
 		go func() {
 			reader := bufio.NewReader(conn)
 
